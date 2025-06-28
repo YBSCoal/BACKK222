@@ -1,78 +1,137 @@
 const express = require("express");
-const app = express();
-const sqlite3 = require("sqlite3").verbose();
 const cors = require("cors");
+const sqlite3 = require("sqlite3").verbose();
 const bodyParser = require("body-parser");
-const db = new sqlite3.Database("./db.sqlite");
+const app = express();
+const port = process.env.PORT || 3000;
 
 app.use(cors());
 app.use(bodyParser.json());
 
-const ADMIN_PASS = "metrobet123";
+// === Database ===
+const db = new sqlite3.Database("metrobet.db");
 
-// Creazione tabelle se non esistono
+// === Crea le tabelle se non esistono ===
 db.serialize(() => {
-db.run(`CREATE TABLE IF NOT EXISTS login_requests (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    username TEXT,
-    screenshot TEXT,
-    word TEXT,
-    status TEXT DEFAULT 'pending'
-  )\`);
-  db.run(\`CREATE TABLE IF NOT EXISTS deposit_requests (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    username TEXT,
-    amount INTEGER,
-    screenshot TEXT,
-    status TEXT DEFAULT 'pending'
-  )\`);
+  db.run(`
+    CREATE TABLE IF NOT EXISTS login_requests (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      username TEXT NOT NULL,
+      screenshot_url TEXT NOT NULL,
+      random_word TEXT NOT NULL,
+      status TEXT DEFAULT 'pending'
+    )
+  `);
+
+  db.run(`
+    CREATE TABLE IF NOT EXISTS deposit_requests (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      username TEXT NOT NULL,
+      amount INTEGER NOT NULL,
+      screenshot_url TEXT NOT NULL,
+      status TEXT DEFAULT 'pending'
+    )
+  `);
 });
 
-const randomWords = ["banana", "carrozza", "esplosione", "volpe", "drago", "cubo", "portale", "pixel", "miniera", "fantasma"];
+// === Funzione per parola casuale ===
+function generateRandomWord() {
+  const words = ["sword", "diamond", "nether", "block", "creeper", "piston", "spawner", "portal"];
+  return words[Math.floor(Math.random() * words.length)];
+}
 
-app.get("/api/random-word", (req, res) => {
-  const word = randomWords[Math.floor(Math.random() * randomWords.length)];
-  res.json({ word });
+// === Endpoint: Richiesta login ===
+app.post("/login-request", (req, res) => {
+  const { username, screenshot_url } = req.body;
+  if (!username || !screenshot_url) return res.status(400).json({ error: "Missing data" });
+
+  const randomWord = generateRandomWord();
+
+  db.run(
+    `INSERT INTO login_requests (username, screenshot_url, random_word) VALUES (?, ?, ?)`,
+    [username, screenshot_url, randomWord],
+    function (err) {
+      if (err) return res.status(500).json({ error: "Database error" });
+      res.json({ success: true, randomWord, requestId: this.lastID });
+    }
+  );
 });
 
-app.post("/api/login", (req, res) => {
-  const { username, screenshot, word } = req.body;
-  db.run("INSERT INTO login_requests (username, screenshot, word) VALUES (?, ?, ?)", [username, screenshot, word], err => {
-    if (err) return res.status(500).send("Errore server");
-    res.send("Richiesta di accesso inviata");
+// === Endpoint: Richiesta deposito ===
+app.post("/deposit-request", (req, res) => {
+  const { username, amount, screenshot_url } = req.body;
+  if (!username || !amount || !screenshot_url) return res.status(400).json({ error: "Missing data" });
+
+  db.run(
+    `INSERT INTO deposit_requests (username, amount, screenshot_url) VALUES (?, ?, ?)`,
+    [username, amount, screenshot_url],
+    function (err) {
+      if (err) return res.status(500).json({ error: "Database error" });
+      res.json({ success: true, requestId: this.lastID });
+    }
+  );
+});
+
+// === Endpoint: Lista richieste login (admin) ===
+app.get("/admin/login-requests", (req, res) => {
+  db.all(`SELECT * FROM login_requests ORDER BY id DESC`, [], (err, rows) => {
+    if (err) return res.status(500).json({ error: "Database error" });
+    res.json(rows);
   });
 });
 
-app.post("/api/deposit", (req, res) => {
-  const { username, amount, screenshot } = req.body;
-  db.run("INSERT INTO deposit_requests (username, amount, screenshot) VALUES (?, ?, ?)", [username, amount, screenshot], err => {
-    if (err) return res.status(500).send("Errore server");
-    res.send("Richiesta di deposito inviata");
+// === Endpoint: Lista richieste deposito (admin) ===
+app.get("/admin/deposit-requests", (req, res) => {
+  db.all(`SELECT * FROM deposit_requests ORDER BY id DESC`, [], (err, rows) => {
+    if (err) return res.status(500).json({ error: "Database error" });
+    res.json(rows);
   });
 });
 
-app.get("/api/admin/all", (req, res) => {
-  const pass = req.query.pass;
-  if (pass !== ADMIN_PASS) return res.status(403).send("Non autorizzato");
-  db.serialize(() => {
-    db.all("SELECT * FROM login_requests WHERE status = 'pending'", (err, logins) => {
-      db.all("SELECT * FROM deposit_requests WHERE status = 'pending'", (err2, deposits) => {
-        res.json({ logins, deposits });
-      });
-    });
+// === Endpoint: Approva o rifiuta login ===
+app.post("/admin/login-requests/:id/:action", (req, res) => {
+  const { id, action } = req.params;
+  if (!["approved", "rejected"].includes(action)) return res.status(400).json({ error: "Invalid action" });
+
+  db.run(`UPDATE login_requests SET status = ? WHERE id = ?`, [action, id], function (err) {
+    if (err) return res.status(500).json({ error: "Database error" });
+    res.json({ success: true });
   });
 });
 
-app.post("/api/admin/moderate", (req, res) => {
-  const { pass, type, id, approve } = req.body;
-  if (pass !== ADMIN_PASS) return res.status(403).send("Non autorizzato");
-  const status = approve ? "approved" : "rejected";
-  const table = type === "login" ? "login_requests" : "deposit_requests";
-  db.run(\`UPDATE \${table} SET status = ? WHERE id = ?\`, [status, id], err => {
-    if (err) return res.status(500).send("Errore");
-    res.send("Aggiornato");
+// === Endpoint: Approva o rifiuta deposito ===
+app.post("/admin/deposit-requests/:id/:action", (req, res) => {
+  const { id, action } = req.params;
+  if (!["approved", "rejected"].includes(action)) return res.status(400).json({ error: "Invalid action" });
+
+  db.run(`UPDATE deposit_requests SET status = ? WHERE id = ?`, [action, id], function (err) {
+    if (err) return res.status(500).json({ error: "Database error" });
+    res.json({ success: true });
   });
 });
 
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log("Metrobet API attiva sulla porta " + PORT));
+// === Avvio server ===
+app.listen(port, () => {
+  console.log(`✅ Metrobet backend attivo su http://localhost:${port}`);
+});
+📦 Altri file necessari
+package.json:
+
+json
+Copia
+Modifica
+{
+  "name": "metrobet-backend",
+  "version": "1.0.0",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "body-parser": "^1.20.2",
+    "cors": "^2.8.5",
+    "express": "^4.18.2",
+    "sqlite3": "^5.1.6"
+  }
+}
+
