@@ -1,11 +1,14 @@
 {
   "name": "metrobet-backend",
   "version": "1.0.0",
-  "description": "Backend API per Metrobet",
+  "description": "Backend per Metrobet - gestione richieste login e depositi Minecraft",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
   },
+  "keywords": ["metrobet", "minecraft", "backend", "sqlite", "express"],
+  "author": "Metrobet Dev",
+  "license": "MIT",
   "dependencies": {
     "body-parser": "^1.20.2",
     "cors": "^2.8.5",
